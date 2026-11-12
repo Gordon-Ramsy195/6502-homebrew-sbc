@@ -1,0 +1,280 @@
+Sections:
+00: "segc000" (C000-C09E)
+01: "segc09e" (C09E-C0E0)
+
+
+Source: "xmodem_6551_fixed.asm"
+                        	     1: ; XModem Receiver for 6502 + 6551 UART
+                        	     2: ; Program location: $C000
+                        	     3: ; Receive buffer: $0300
+                        	     4: ; UART base: $8400
+                        	     5: 
+                        	     6: ; 6551 Register addresses
+                        	     7: UART_DATA   = $8400
+                        	     8: UART_STATUS = $8401
+                        	     9: UART_CMD    = $8402
+                        	    10: UART_CTRL   = $8403
+                        	    11: 
+                        	    12: ; XModem constants
+                        	    13: SOH         = $01
+                        	    14: EOT         = $04
+                        	    15: ACK         = $06
+                        	    16: NAK         = $15
+                        	    17: CAN         = $18
+                        	    18: 
+                        	    19: ; Zero page variables
+                        	    20: DEST_ADDR_L = $85
+                        	    21: DEST_ADDR_H = $86
+                        	    22: BLOCK_NUM   = $80
+                        	    23: BLOCK_INV   = $81
+                        	    24: CHECKSUM    = $82
+                        	    25: RX_COUNT    = $83
+                        	    26: CHKSUM_RX   = $84
+                        	    27: BLOCK_COUNT = $87
+                        	    28: 
+                        	    29:         ORG $C000
+                        	    30: 
+                        	    31: START:
+                        	    32:         ; Control register: 8 bits, 1 stop bit, no parity, 19200 baud
+00:C000 A91F            	    33:         LDA #$1F
+00:C002 8D0384          	    34:         STA UART_CTRL
+                        	    35: 
+                        	    36:         ; Command register
+00:C005 A90B            	    37:         LDA #$0B
+00:C007 8D0284          	    38:         STA UART_CMD
+                        	    39: 
+                        	    40:         ; Short startup delay
+00:C00A A220            	    41:         LDX #$20
+                        	    42: INIT_DELAY:
+00:C00C CA              	    43:         DEX
+00:C00D D0FD            	    44:         BNE INIT_DELAY
+                        	    45: 
+                        	    46:         ; Initialize receive address to $0300
+00:C00F A900            	    47:         LDA #$00
+00:C011 8585            	    48:         STA DEST_ADDR_L
+00:C013 A903            	    49:         LDA #$03
+00:C015 8586            	    50:         STA DEST_ADDR_H
+00:C017 A900            	    51:         LDA #$00
+00:C019 8587            	    52:         STA BLOCK_COUNT
+                        	    53: 
+                        	    54:         ; Send initial NAK
+00:C01B A915            	    55:         LDA #NAK
+00:C01D 20CDC0          	    56:         JSR TX_CHAR
+                        	    57: 
+                        	    58: ; $C020 - Main receive loop with timeout
+00:C020 A2FF            	    59:         LDX #$FF
+                        	    60: RECV_LOOP:
+00:C022 A0FF            	    61:         LDY #$FF
+                        	    62: RX_TIMEOUT:
+00:C024 AD0184          	    63:         LDA UART_STATUS
+00:C027 2908            	    64:         AND #$08
+00:C029 D009            	    65:         BNE GOT_BYTE
+00:C02B 88              	    66:         DEY
+00:C02C D0F6            	    67:         BNE RX_TIMEOUT
+00:C02E CA              	    68:         DEX
+00:C02F D0F1            	    69:         BNE RECV_LOOP
+00:C031 4C1BC0          	    70:         JMP $C01B           ; Timeout
+                        	    71: 
+                        	    72: ; $C034
+                        	    73: GOT_BYTE:
+00:C034 AD0084          	    74:         LDA UART_DATA
+                        	    75: 
+00:C037 C901            	    76:         CMP #SOH
+00:C039 F00B            	    77:         BEQ RECV_BLOCK
+00:C03B C904            	    78:         CMP #EOT
+00:C03D F073            	    79:         BEQ XMODEM_DONE
+00:C03F C918            	    80:         CMP #CAN
+00:C041 F07C            	    81:         BEQ XMODEM_ERROR
+                        	    82: 
+00:C043 4C1BC0          	    83:         JMP $C01B
+                        	    84: 
+                        	    85: ; $C046
+                        	    86: RECV_BLOCK:
+00:C046 20C2C0          	    87:         JSR RX_CHAR
+00:C049 8580            	    88:         STA BLOCK_NUM
+                        	    89: 
+00:C04B 20C2C0          	    90:         JSR RX_CHAR
+00:C04E 8581            	    91:         STA BLOCK_INV
+                        	    92: 
+00:C050 A580            	    93:         LDA BLOCK_NUM
+00:C052 49FF            	    94:         EOR #$FF
+00:C054 C581            	    95:         CMP BLOCK_INV
+00:C056 D03E            	    96:         BNE BAD_BLOCK
+                        	    97: 
+00:C058 A900            	    98:         LDA #$00
+00:C05A 8582            	    99:         STA CHECKSUM
+00:C05C A900            	   100:         LDA #$00
+00:C05E 8583            	   101:         STA RX_COUNT
+                        	   102: 
+                        	   103: ; $C060
+                        	   104: DATA_LOOP:
+00:C060 20C2C0          	   105:         JSR RX_CHAR
+                        	   106: 
+00:C063 A483            	   107:         LDY RX_COUNT
+00:C065 9185            	   108:         STA (DEST_ADDR_L),Y
+                        	   109: 
+00:C067 18              	   110:         CLC
+00:C068 6582            	   111:         ADC CHECKSUM
+00:C06A 8582            	   112:         STA CHECKSUM
+                        	   113: 
+00:C06C E683            	   114:         INC RX_COUNT
+00:C06E A583            	   115:         LDA RX_COUNT
+00:C070 C980            	   116:         CMP #$80
+00:C072 D0EC            	   117:         BNE DATA_LOOP
+                        	   118: 
+00:C074 20C2C0          	   119:         JSR RX_CHAR
+00:C077 8584            	   120:         STA CHKSUM_RX
+                        	   121: 
+00:C079 A582            	   122:         LDA CHECKSUM
+00:C07B C584            	   123:         CMP CHKSUM_RX
+00:C07D D017            	   124:         BNE BAD_BLOCK
+                        	   125: 
+00:C07F 18              	   126:         CLC
+00:C080 A585            	   127:         LDA DEST_ADDR_L
+00:C082 6980            	   128:         ADC #$80
+00:C084 8585            	   129:         STA DEST_ADDR_L
+00:C086 A586            	   130:         LDA DEST_ADDR_H
+00:C088 6900            	   131:         ADC #$00
+00:C08A 8586            	   132:         STA DEST_ADDR_H
+                        	   133: 
+00:C08C E687            	   134:         INC BLOCK_COUNT
+                        	   135: 
+00:C08E A906            	   136:         LDA #ACK
+00:C090 20CDC0          	   137:         JSR TX_CHAR
+00:C093 4C9EC0          	   138:         JMP $C09E
+                        	   139: 
+                        	   140: ; $C096
+                        	   141: BAD_BLOCK:
+00:C096 A915            	   142:         LDA #NAK
+00:C098 20CDC0          	   143:         JSR TX_CHAR
+00:C09B 4C9EC0          	   144:         JMP $C09E
+                        	   145: 
+                        	   146: ; $C09E - Second timeout recv loop (after ACK/NAK)
+                        	   147:         ORG $C09E
+01:C09E A2FF            	   148:         LDX #$FF
+                        	   149: RECV_LOOP2:
+01:C0A0 A0FF            	   150:         LDY #$FF
+                        	   151: RX_TIMEOUT2:
+01:C0A2 AD0184          	   152:         LDA UART_STATUS
+01:C0A5 2908            	   153:         AND #$08
+01:C0A7 D08B            	   154:         BNE GOT_BYTE        ; Branch to $C034
+01:C0A9 88              	   155:         DEY
+01:C0AA D0F6            	   156:         BNE RX_TIMEOUT2
+01:C0AC CA              	   157:         DEX
+01:C0AD D0F1            	   158:         BNE RECV_LOOP2
+01:C0AF 4C1BC0          	   159:         JMP $C01B
+                        	   160: 
+                        	   161: ; $C0B2
+                        	   162: XMODEM_DONE:
+01:C0B2 A906            	   163:         LDA #ACK
+01:C0B4 20CDC0          	   164:         JSR TX_CHAR
+                        	   165: 
+01:C0B7 A2FF            	   166:         LDX #$FF
+01:C0B9 CA              	   167: DELAY:  DEX
+01:C0BA D0FD            	   168:         BNE DELAY
+                        	   169: 
+01:C0BC 4C0003          	   170:         JMP $0300
+                        	   171: 
+                        	   172: ; $C0BF
+                        	   173: XMODEM_ERROR:
+01:C0BF 4CBFC0          	   174:         JMP $C0BF           ; Self-loop (infinite)
+                        	   175: 
+                        	   176: ; $C0C2
+                        	   177: RX_CHAR:
+                        	   178: RX_WAIT:
+01:C0C2 AD0184          	   179:         LDA UART_STATUS
+01:C0C5 2908            	   180:         AND #$08
+01:C0C7 F0F9            	   181:         BEQ RX_WAIT
+01:C0C9 AD0084          	   182:         LDA UART_DATA
+01:C0CC 60              	   183:         RTS
+                        	   184: 
+                        	   185: ; $C0CD
+                        	   186: TX_CHAR:
+01:C0CD 48              	   187:         PHA
+                        	   188: TX_WAIT:
+01:C0CE AD0184          	   189:         LDA UART_STATUS
+01:C0D1 2910            	   190:         AND #$10
+01:C0D3 F0F9            	   191:         BEQ TX_WAIT
+01:C0D5 68              	   192:         PLA
+01:C0D6 8D0084          	   193:         STA UART_DATA
+01:C0D9 60              	   194:         RTS
+                        	   195: 
+01:C0DA EA              	   196:         NOP
+01:C0DB EA              	   197:         NOP
+01:C0DC EA              	   198:         NOP
+01:C0DD EA              	   199:         NOP
+01:C0DE EA              	   200:         NOP
+01:C0DF EA              	   201:         NOP
+
+
+Symbols by name:
+ACK                              E:0006
+BAD_BLOCK                        A:C096
+BLOCK_COUNT                      E:0087
+BLOCK_INV                        E:0081
+BLOCK_NUM                        E:0080
+CAN                              E:0018
+CHECKSUM                         E:0082
+CHKSUM_RX                        E:0084
+DATA_LOOP                        A:C060
+DELAY                            A:C0B9
+DEST_ADDR_H                      E:0086
+DEST_ADDR_L                      E:0085
+EOT                              E:0004
+GOT_BYTE                         A:C034
+INIT_DELAY                       A:C00C
+NAK                              E:0015
+RECV_BLOCK                       A:C046
+RECV_LOOP                        A:C022
+RECV_LOOP2                       A:C0A0
+RX_CHAR                          A:C0C2
+RX_COUNT                         E:0083
+RX_TIMEOUT                       A:C024
+RX_TIMEOUT2                      A:C0A2
+RX_WAIT                          A:C0C2
+SOH                              E:0001
+START                            A:C000
+TX_CHAR                          A:C0CD
+TX_WAIT                          A:C0CE
+UART_CMD                         E:8402
+UART_CTRL                        E:8403
+UART_DATA                        E:8400
+UART_STATUS                      E:8401
+XMODEM_DONE                      A:C0B2
+XMODEM_ERROR                     A:C0BF
+
+Symbols by value:
+0001 SOH
+0004 EOT
+0006 ACK
+0015 NAK
+0018 CAN
+0080 BLOCK_NUM
+0081 BLOCK_INV
+0082 CHECKSUM
+0083 RX_COUNT
+0084 CHKSUM_RX
+0085 DEST_ADDR_L
+0086 DEST_ADDR_H
+0087 BLOCK_COUNT
+8400 UART_DATA
+8401 UART_STATUS
+8402 UART_CMD
+8403 UART_CTRL
+C000 START
+C00C INIT_DELAY
+C022 RECV_LOOP
+C024 RX_TIMEOUT
+C034 GOT_BYTE
+C046 RECV_BLOCK
+C060 DATA_LOOP
+C096 BAD_BLOCK
+C0A0 RECV_LOOP2
+C0A2 RX_TIMEOUT2
+C0B2 XMODEM_DONE
+C0B9 DELAY
+C0BF XMODEM_ERROR
+C0C2 RX_WAIT
+C0C2 RX_CHAR
+C0CD TX_CHAR
+C0CE TX_WAIT
